@@ -1,0 +1,142 @@
+diff --git a/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx b/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx
+index 382bd28..b605e4e 100644
+--- a/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx
++++ b/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx
+@@ -72,6 +72,17 @@ function randomIndex(count: number) {
+   return Math.floor(Math.random() * count)
+ }
+ 
++function estimateStreamTokens(delta: string) {
++  return Math.max(1, Math.ceil(Buffer.byteLength(delta, "utf8") / 4))
++}
++
++function formatTps(value: number) {
++  if (!Number.isFinite(value) || value <= 0) return undefined
++  if (value >= 100) return `${Math.round(value)} TPS`
++  if (value >= 10) return `${value.toFixed(1)} TPS`
++  return `${value.toFixed(2)} TPS`
++}
++
+ export function Prompt(props: PromptProps) {
+   let input: TextareaRenderable
+   let anchor: BoxRenderable
+@@ -137,25 +148,93 @@ export function Prompt(props: PromptProps) {
+     return messages.findLast((m) => m.role === "user")
+   })
+ 
++  const sessionMessages = createMemo(() => {
++    if (!props.sessionID) return []
++    return sync.data.message[props.sessionID] ?? []
++  })
++
++  const activeAssistantMessage = createMemo(() => {
++    return sessionMessages().findLast((item): item is AssistantMessage => item.role === "assistant" && !item.time.completed)
++  })
++
++  const [streamSamples, setStreamSamples] = createSignal<Array<{ at: number; tokens: number }>>([])
++  const [clock, setClock] = createSignal(Date.now())
++  const STREAM_WINDOW_MS = 15_000
++
++  function pruneSamples(now = Date.now()) {
++    setStreamSamples((samples) => samples.filter((sample) => now - sample.at <= STREAM_WINDOW_MS))
++  }
++
++  sdk.event.on("message.part.delta", (evt) => {
++    if (!props.sessionID) return
++    if (evt.properties.field !== "text") return
++    if (evt.properties.messageID !== activeAssistantMessage()?.id) return
++    const parts = sync.data.part[evt.properties.messageID]
++    const part = parts?.find((item) => item.id === evt.properties.partID)
++    if (!part) return
++    if (part.type !== "text" && part.type !== "reasoning") return
++    const now = Date.now()
++    setStreamSamples((samples) => [...samples.filter((sample) => now - sample.at <= STREAM_WINDOW_MS), { at: now, tokens: estimateStreamTokens(evt.properties.delta) }])
++  })
++
++  sdk.event.on("message.updated", (evt) => {
++    if (evt.properties.info.sessionID !== props.sessionID) return
++    if (evt.properties.info.role !== "assistant") return
++    if (evt.properties.info.time.completed) {
++      pruneSamples(evt.properties.info.time.completed)
++    }
++  })
++
++  onMount(() => {
++    const timer = setInterval(() => {
++      setClock(Date.now())
++      pruneSamples()
++    }, 1000)
++
++    onCleanup(() => clearInterval(timer))
++  })
++
+   const usage = createMemo(() => {
+     if (!props.sessionID) return
+-    const msg = sync.data.message[props.sessionID] ?? []
++    const msg = sessionMessages()
+     const last = msg.findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
+     if (!last) return
+ 
+-    const tokens =
++    const totalTokens =
+       last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
+-    if (tokens <= 0) return
++    if (totalTokens <= 0) return
+ 
+     const model = sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
+-    const pct = model?.limit.context ? `${Math.round((tokens / model.limit.context) * 100)}%` : undefined
++    const pct = model?.limit.context ? `${Math.round((totalTokens / model.limit.context) * 100)}%` : undefined
+     const cost = msg.reduce((sum, item) => sum + (item.role === "assistant" ? item.cost : 0), 0)
++    const user = msg.find((item) => item.role === "user" && item.id === last.parentID)
++    const start = user?.time.created ?? last.time.created
++    const end = last.time.completed ?? last.time.created
++    const durationSeconds = end > start ? (end - start) / 1000 : 0
++    const exactTotalTps = durationSeconds > 0 ? totalTokens / durationSeconds : 0
++    const exactOutputTps = durationSeconds > 0 ? last.tokens.output / durationSeconds : 0
+     return {
+-      context: pct ? `${Locale.number(tokens)} (${pct})` : Locale.number(tokens),
++      context: pct ? `${Locale.number(totalTokens)} (${pct})` : Locale.number(totalTokens),
+       cost: cost > 0 ? money.format(cost) : undefined,
++      totalTps: formatTps(exactTotalTps),
++      outputTps: formatTps(exactOutputTps),
+     }
+   })
+ 
++  const liveTps = createMemo(() => {
++    clock()
++    if (status().type === "idle") return undefined
++    const samples = streamSamples()
++    if (samples.length === 0) return undefined
++    const now = Date.now()
++    const relevant = samples.filter((sample) => now - sample.at <= STREAM_WINDOW_MS)
++    if (relevant.length === 0) return undefined
++    const total = relevant.reduce((sum, sample) => sum + sample.tokens, 0)
++    const earliest = relevant[0]?.at ?? now
++    const durationSeconds = Math.max(1, (now - earliest) / 1000)
++    return formatTps(total / durationSeconds)
++  })
++
+   const [store, setStore] = createStore<{
+     prompt: PromptInfo
+     mode: "normal" | "shell"
+@@ -1224,7 +1303,7 @@ export function Prompt(props: PromptProps) {
+                     <Match when={usage()}>
+                       {(item) => (
+                         <text fg={theme.textMuted} wrapMode="none">
+-                          {[item().context, item().cost].filter(Boolean).join(" · ")}
++                          {[liveTps() ? `~${liveTps()}` : item().totalTps, item().context, item().cost].filter(Boolean).join(" · ")}
+                         </text>
+                       )}
+                     </Match>
+diff --git a/packages/opencode/src/installation/meta.ts b/packages/opencode/src/installation/meta.ts
+index 6a1315d..9b694f1 100644
+--- a/packages/opencode/src/installation/meta.ts
++++ b/packages/opencode/src/installation/meta.ts
+@@ -3,5 +3,5 @@ declare global {
+   const OPENCODE_CHANNEL: string
+ }
+ 
+-export const VERSION = typeof OPENCODE_VERSION === "string" ? OPENCODE_VERSION : "local"
+-export const CHANNEL = typeof OPENCODE_CHANNEL === "string" ? OPENCODE_CHANNEL : "local"
++export const VERSION = typeof OPENCODE_VERSION === "string" ? OPENCODE_VERSION : "1.3.13"
++export const CHANNEL = typeof OPENCODE_CHANNEL === "string" ? OPENCODE_CHANNEL : "latest"
