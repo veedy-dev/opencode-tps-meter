@@ -6,6 +6,12 @@ It shows:
 - live rolling TPS estimate over the last 15 seconds while a response is streaming
 - exact TPS for the last completed assistant response after completion
 
+## Demo
+
+![OpenCode TPS Meter demo](assets/tps-meter-demo.gif)
+
+Full video: [assets/tps-meter-demo.mp4](assets/tps-meter-demo.mp4)
+
 This patch targets `opencode 1.3.13` TUI/CLI, not Desktop.
 
 ## Install
