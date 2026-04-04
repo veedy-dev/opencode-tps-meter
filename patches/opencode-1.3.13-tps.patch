@@ -1,8 +1,8 @@
 diff --git a/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx b/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx
-index 382bd28..b605e4e 100644
+index 382bd28..5ab5172 100644
 --- a/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx
 +++ b/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx
-@@ -72,6 +72,17 @@ function randomIndex(count: number) {
+@@ -72,6 +72,54 @@ function randomIndex(count: number) {
    return Math.floor(Math.random() * count)
  }
  
@@ -17,10 +17,47 @@ index 382bd28..b605e4e 100644
 +  return `${value.toFixed(2)} TPS`
 +}
 +
++type StreamSample = { at: number; tokens: number }
++
++const STREAM_WINDOW_MS = 15_000
++const ACTIVE_GAP_MS = 1_250
++const LIVE_STALE_MS = 1_500
++const SINGLE_SAMPLE_MS = 1_000
++const MAX_MESSAGE_SAMPLES = 4_096
++const MAX_TRACKED_MESSAGES = 24
++
++function activeDurationMs(samples: StreamSample[], tailAt?: number) {
++  if (samples.length === 0) return 0
++  if (samples.length === 1) {
++    const tailDuration = tailAt ? Math.max(0, tailAt - samples[0].at) : SINGLE_SAMPLE_MS
++    return Math.min(Math.max(tailDuration, 250), SINGLE_SAMPLE_MS)
++  }
++
++  let duration = 0
++  for (let i = 1; i < samples.length; i++) {
++    duration += Math.min(Math.max(0, samples[i].at - samples[i - 1].at), ACTIVE_GAP_MS)
++  }
++
++  if (tailAt) {
++    duration += Math.min(Math.max(0, tailAt - samples[samples.length - 1].at), ACTIVE_GAP_MS)
++  }
++
++  return Math.max(duration, SINGLE_SAMPLE_MS)
++}
++
++function truncateTrackedMessages(stats: Record<string, StreamSample[]>) {
++  const entries = Object.entries(stats)
++  if (entries.length <= MAX_TRACKED_MESSAGES) return stats
++  const trimmed = entries
++    .sort((a, b) => (b[1][b[1].length - 1]?.at ?? 0) - (a[1][a[1].length - 1]?.at ?? 0))
++    .slice(0, MAX_TRACKED_MESSAGES)
++  return Object.fromEntries(trimmed)
++}
++
  export function Prompt(props: PromptProps) {
    let input: TextareaRenderable
    let anchor: BoxRenderable
-@@ -137,25 +148,93 @@ export function Prompt(props: PromptProps) {
+@@ -137,25 +185,110 @@ export function Prompt(props: PromptProps) {
      return messages.findLast((m) => m.role === "user")
    })
  
@@ -33,12 +70,24 @@ index 382bd28..b605e4e 100644
 +    return sessionMessages().findLast((item): item is AssistantMessage => item.role === "assistant" && !item.time.completed)
 +  })
 +
-+  const [streamSamples, setStreamSamples] = createSignal<Array<{ at: number; tokens: number }>>([])
++  const [streamSamples, setStreamSamples] = createSignal<StreamSample[]>([])
++  const [messageSamples, setMessageSamples] = createSignal<Record<string, StreamSample[]>>({})
 +  const [clock, setClock] = createSignal(Date.now())
-+  const STREAM_WINDOW_MS = 15_000
 +
 +  function pruneSamples(now = Date.now()) {
 +    setStreamSamples((samples) => samples.filter((sample) => now - sample.at <= STREAM_WINDOW_MS))
++  }
++
++  function appendSample(messageID: string, sample: StreamSample) {
++    const now = sample.at
++    setStreamSamples((samples) => [...samples.filter((item) => now - item.at <= STREAM_WINDOW_MS), sample])
++    setMessageSamples((stats) => {
++      const next = {
++        ...stats,
++        [messageID]: [...(stats[messageID] ?? []), sample].slice(-MAX_MESSAGE_SAMPLES),
++      }
++      return truncateTrackedMessages(next)
++    })
 +  }
 +
 +  sdk.event.on("message.part.delta", (evt) => {
@@ -50,7 +99,7 @@ index 382bd28..b605e4e 100644
 +    if (!part) return
 +    if (part.type !== "text" && part.type !== "reasoning") return
 +    const now = Date.now()
-+    setStreamSamples((samples) => [...samples.filter((sample) => now - sample.at <= STREAM_WINDOW_MS), { at: now, tokens: estimateStreamTokens(evt.properties.delta) }])
++    appendSample(evt.properties.messageID, { at: now, tokens: estimateStreamTokens(evt.properties.delta) })
 +  })
 +
 +  sdk.event.on("message.updated", (evt) => {
@@ -90,7 +139,10 @@ index 382bd28..b605e4e 100644
 +    const user = msg.find((item) => item.role === "user" && item.id === last.parentID)
 +    const start = user?.time.created ?? last.time.created
 +    const end = last.time.completed ?? last.time.created
-+    const durationSeconds = end > start ? (end - start) / 1000 : 0
++    const sampleWindow = messageSamples()[last.id] ?? []
++    const activeMs = activeDurationMs(sampleWindow)
++    const wallMs = end > start ? end - start : 0
++    const durationSeconds = (activeMs > 0 ? activeMs : wallMs) / 1000
 +    const exactTotalTps = durationSeconds > 0 ? totalTokens / durationSeconds : 0
 +    const exactOutputTps = durationSeconds > 0 ? last.tokens.output / durationSeconds : 0
      return {
@@ -110,16 +162,18 @@ index 382bd28..b605e4e 100644
 +    const now = Date.now()
 +    const relevant = samples.filter((sample) => now - sample.at <= STREAM_WINDOW_MS)
 +    if (relevant.length === 0) return undefined
++    const lastSample = relevant[relevant.length - 1]
++    if (!lastSample || now - lastSample.at > LIVE_STALE_MS) return undefined
 +    const total = relevant.reduce((sum, sample) => sum + sample.tokens, 0)
-+    const earliest = relevant[0]?.at ?? now
-+    const durationSeconds = Math.max(1, (now - earliest) / 1000)
++    const durationSeconds = activeDurationMs(relevant, now) / 1000
++    if (durationSeconds <= 0) return undefined
 +    return formatTps(total / durationSeconds)
 +  })
 +
    const [store, setStore] = createStore<{
      prompt: PromptInfo
      mode: "normal" | "shell"
-@@ -1224,7 +1303,7 @@ export function Prompt(props: PromptProps) {
+@@ -1224,7 +1357,7 @@ export function Prompt(props: PromptProps) {
                      <Match when={usage()}>
                        {(item) => (
                          <text fg={theme.textMuted} wrapMode="none">
