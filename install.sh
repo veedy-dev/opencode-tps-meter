@@ -52,7 +52,30 @@ need bun
 
 load_manifest
 
-REQUESTED_VERSION="${OPENCODE_TPS_VERSION:-$LATEST_SUPPORTED}"
+detect_installed_version() {
+  local candidate=""
+
+  if [ -x "$STOCK" ]; then
+    candidate="$("$STOCK" --version 2>/dev/null || true)"
+  elif [ -n "${EXISTING_OPENCODE:-}" ] && [ "$EXISTING_OPENCODE" != "$WRAPPER" ]; then
+    candidate="$("$EXISTING_OPENCODE" --version 2>/dev/null || true)"
+  fi
+
+  printf '%s' "${candidate%% *}"
+}
+
+EXISTING_OPENCODE="$(command -v opencode || true)"
+BUN_BIN="$(command -v bun)"
+DETECTED_VERSION="$(detect_installed_version)"
+
+if [ -n "${OPENCODE_TPS_VERSION:-}" ]; then
+  REQUESTED_VERSION="$OPENCODE_TPS_VERSION"
+elif [ -n "$DETECTED_VERSION" ] && is_supported_version "$DETECTED_VERSION"; then
+  REQUESTED_VERSION="$DETECTED_VERSION"
+else
+  REQUESTED_VERSION="$LATEST_SUPPORTED"
+fi
+
 is_supported_version "$REQUESTED_VERSION" || fail \
   "Unsupported OpenCode version '$REQUESTED_VERSION'. Supported versions: $(print_supported_versions | paste -sd ', ' -)"
 
@@ -62,8 +85,6 @@ PATCH_URL="$REPO_RAW_BASE/$PATCH_RELATIVE_PATH"
 PATCH_LOCAL="$SCRIPT_DIR/$PATCH_RELATIVE_PATH"
 RELEASE_DIR="$RELEASES_DIR/$REQUESTED_VERSION"
 PATCH_FILE="$INSTALL_ROOT/opencode-$REQUESTED_VERSION.patch"
-EXISTING_OPENCODE="$(command -v opencode || true)"
-BUN_BIN="$(command -v bun)"
 
 mkdir -p "$INSTALL_ROOT" "$RELEASES_DIR" "$BIN_DIR"
 TMP_DIR="$(mktemp -d "$INSTALL_ROOT/.install.XXXXXX")"
@@ -118,5 +139,9 @@ perl -0pi -e 's|__BUN_BIN__|'"$BUN_BIN"'|g' "$WRAPPER"
 chmod +x "$WRAPPER"
 
 echo "Installed OpenCode TPS Meter for OpenCode $REQUESTED_VERSION."
+if [ -n "$DETECTED_VERSION" ] && [ "$REQUESTED_VERSION" != "$DETECTED_VERSION" ]; then
+  echo "Detected installed OpenCode version: $DETECTED_VERSION"
+  echo "Using latest supported version instead: $REQUESTED_VERSION"
+fi
 echo "Run: opencode"
 echo "Fallback: opencode-stock"

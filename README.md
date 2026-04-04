@@ -22,12 +22,15 @@ One command:
 curl -fsSL https://raw.githubusercontent.com/guard22/opencode-tps-meter/main/install.sh | bash
 ```
 
-By default, the installer uses the **latest supported** OpenCode version from [`manifest.sh`](manifest.sh).
+Default behavior:
+- if `OPENCODE_TPS_VERSION` is set, install that exact supported version
+- else if your installed `opencode-stock` or non-wrapper `opencode` version is supported, install that version
+- else fall back to the latest supported version from [`manifest.sh`](manifest.sh)
 
-To install a specific supported version:
+To force a specific supported version:
 
 ```bash
-OPENCODE_TPS_VERSION=1.3.13 curl -fsSL https://raw.githubusercontent.com/guard22/opencode-tps-meter/main/install.sh | bash
+OPENCODE_TPS_VERSION=1.3.14 curl -fsSL https://raw.githubusercontent.com/guard22/opencode-tps-meter/main/install.sh | bash
 ```
 
 ## How the installer works
@@ -48,6 +51,7 @@ Current supported versions are listed in [`manifest.sh`](manifest.sh).
 
 Right now:
 
+- `1.3.14`
 - `1.3.13`
 
 ## Uninstall
@@ -67,5 +71,6 @@ curl -fsSL https://raw.githubusercontent.com/guard22/opencode-tps-meter/main/uni
 
 ## Tested
 
+- OpenCode `1.3.14`
 - OpenCode `1.3.13`
 - Bun `1.3.5`
