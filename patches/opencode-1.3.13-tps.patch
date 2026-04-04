@@ -1,8 +1,8 @@
 diff --git a/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx b/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx
-index 382bd2806..28c1aab85 100644
+index 96563b8..7171fcd 100644
 --- a/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx
 +++ b/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx
-@@ -72,6 +72,54 @@ function randomIndex(count: number) {
+@@ -71,6 +71,54 @@ function randomIndex(count: number) {
    return Math.floor(Math.random() * count)
  }
  
@@ -57,7 +57,7 @@ index 382bd2806..28c1aab85 100644
  export function Prompt(props: PromptProps) {
    let input: TextareaRenderable
    let anchor: BoxRenderable
-@@ -137,25 +185,110 @@ export function Prompt(props: PromptProps) {
+@@ -135,25 +183,110 @@ export function Prompt(props: PromptProps) {
      return messages.findLast((m) => m.role === "user")
    })
  
@@ -173,22 +173,24 @@ index 382bd2806..28c1aab85 100644
    const [store, setStore] = createStore<{
      prompt: PromptInfo
      mode: "normal" | "shell"
-@@ -1224,7 +1357,7 @@ export function Prompt(props: PromptProps) {
+@@ -1196,7 +1329,9 @@ export function Prompt(props: PromptProps) {
                      <Match when={usage()}>
                        {(item) => (
                          <text fg={theme.textMuted} wrapMode="none">
 -                          {[item().context, item().cost].filter(Boolean).join(" · ")}
-+                          {[liveTps() ? `~${liveTps()}` : item().outputTps, item().context, item().cost].filter(Boolean).join(" · ")}
++                          {[liveTps() ? `~${liveTps()}` : item().outputTps, item().context, item().cost]
++                            .filter(Boolean)
++                            .join(" · ")}
                          </text>
                        )}
                      </Match>
 diff --git a/packages/opencode/src/index.ts b/packages/opencode/src/index.ts
-index 1fa027abf..5673458ca 100644
+index 2da35ac..49b4165 100644
 --- a/packages/opencode/src/index.ts
 +++ b/packages/opencode/src/index.ts
-@@ -37,6 +37,17 @@ import { errorMessage } from "./util/error"
+@@ -36,6 +36,17 @@ import { Database } from "./storage/db"
+ import { errorMessage } from "./util/error"
  import { PluginCommand } from "./cli/cmd/plug"
- import { Heap } from "./cli/heap"
  
 +if (process.env.OPENCODE_LAUNCH_CWD) {
 +  try {
@@ -205,7 +207,7 @@ index 1fa027abf..5673458ca 100644
    Log.Default.error("rejection", {
      e: errorMessage(e),
 diff --git a/packages/opencode/src/installation/meta.ts b/packages/opencode/src/installation/meta.ts
-index 6a1315db2..9b694f18c 100644
+index 6a1315d..9b694f1 100644
 --- a/packages/opencode/src/installation/meta.ts
 +++ b/packages/opencode/src/installation/meta.ts
 @@ -3,5 +3,5 @@ declare global {

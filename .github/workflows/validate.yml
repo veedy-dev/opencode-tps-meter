@@ -1,0 +1,44 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ["1.3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load manifest
+        id: manifest
+        run: |
+          source ./manifest.sh
+          echo "tag=$(resolve_upstream_tag '${{ matrix.version }}')" >> "$GITHUB_OUTPUT"
+          echo "patch=$(resolve_patch_path '${{ matrix.version }}')" >> "$GITHUB_OUTPUT"
+
+      - name: Clone OpenCode
+        run: git clone --depth 1 --branch "${{ steps.manifest.outputs.tag }}" https://github.com/anomalyco/opencode.git opencode-src
+
+      - name: Apply patch check
+        run: git -C opencode-src apply --check "$GITHUB_WORKSPACE/${{ steps.manifest.outputs.patch }}"
+
+      - name: Apply patch
+        run: git -C opencode-src apply "$GITHUB_WORKSPACE/${{ steps.manifest.outputs.patch }}"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        working-directory: opencode-src
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck patched opencode
+        working-directory: opencode-src/packages/opencode
+        run: bun run typecheck
